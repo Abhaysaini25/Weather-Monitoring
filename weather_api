@@ -1,0 +1,164 @@
+import json
+import sqlite3
+import requests
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# OpenWeatherMap API Key
+api_key = "ebe4d01c53aef3f296068a0a19528b31"
+
+# Base URL for OpenWeatherMap API
+base_url = "http://api.openweathermap.org/data/2.5/weather?"
+
+# City names and coordinates
+cities = {
+    "Delhi": {"lat": 28.7041, "lon": 77.1025},
+    "Mumbai": {"lat": 19.0760, "lon": 72.8777},
+    "Chennai": {"lat": 13.0800, "lon": 80.2700},
+    "Bangalore": {"lat": 12.9716, "lon": 77.5946},
+    "Kolkata": {"lat": 22.5626, "lon": 88.3630},
+    "Hyderabad": {"lat": 17.3850, "lon": 78.4867}
+}
+
+def kelvin_to_celsius(k):
+    return k - 273.15
+
+def kelvin_to_fahrenheit(k):
+    return (k - 273.15) * 9/5 + 32
+
+def connect_to_database():
+    try:
+        conn = sqlite3.connect("weather_data.db")
+        cursor = conn.cursor()
+        return conn, cursor
+    except sqlite3.Error as e:
+        print(f"Database connection failed: {e}")
+
+def create_table(conn, cursor):
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS weather_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                city TEXT,
+                temperature_c REAL,
+                feels_like_c REAL,
+                temperature_f REAL,
+                feels_like_f REAL,
+                main TEXT,
+                dt DATETIME
+            )
+        """)
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"Table creation failed: {e}")
+
+def retrieve_weather_data(city, coordinates):
+    params = {
+        "lat": coordinates["lat"],
+        "lon": coordinates["lon"],
+        "appid": api_key,
+        "units": "standard"
+    }
+    try:
+        response = requests.get(base_url, params=params)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"API request failed: {e}")
+
+def insert_data(conn, cursor, city, data):
+    try:
+        cursor.execute("""
+            INSERT INTO weather_data (
+                city, temperature_c, feels_like_c, temperature_f, feels_like_f,
+                main, dt
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            city,
+            kelvin_to_celsius(data["main"]["temp"]),
+            kelvin_to_celsius(data["main"]["feels_like"]),
+            kelvin_to_fahrenheit(data["main"]["temp"]),
+            kelvin_to_fahrenheit(data["main"]["feels_like"]),
+            data["weather"][0]["main"],
+            data["dt"]
+        ))
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"Data insertion failed: {e}")
+
+def roll_up_data(cursor):
+    cursor.execute("SELECT * FROM weather_data")
+    data = cursor.fetchall()
+    aggregated_data = {}
+    for row in data:
+        city = row[1]
+        date = row[7]
+        temperature_c = row[2]
+        if city not in aggregated_data:
+            aggregated_data[city] = {}
+        if date not in aggregated_data[city]:
+            aggregated_data[city][date] = []
+        aggregated_data[city][date].append(temperature_c)
+    return aggregated_data
+
+def check_alerts(data):
+    alerts = []
+    for city, dates in data.items():
+        for date, temperatures in dates.items():
+            avg_temperature = np.mean(temperatures)
+            if avg_temperature > 30:
+                alerts.append((city, date, "High Temperature"))
+    return alerts
+
+# Call functions
+conn, cursor = connect_to_database()
+create_table(conn, cursor)
+
+for city, coordinates in cities.items():
+    data = retrieve_weather_data(city, coordinates)
+    insert_data(conn, cursor, city, data)
+
+aggregated_data = roll_up_data(cursor)
+
+# Convert aggregated_data to pandas DataFrame
+df = pd.DataFrame([
+    {"City": city, "Date": date, "Temperature (°C)": temp}
+    for city, dates in aggregated_data.items()
+    for date, temps in dates.items()
+    for temp in temps
+])
+# Temperature Distribution Visualization
+plt.figure(figsize=(10, 6))
+sns.boxplot(x="City", y="Temperature (°C)", data=df)
+plt.title("Temperature Distribution")
+plt.xlabel("City")
+plt.ylabel("Temperature (°C)")
+plt.show()
+
+# Temperature Heatmap Visualization
+temperature_df = df.pivot_table(index="Date", columns="City", values="Temperature (°C)")
+plt.figure(figsize=(10, 6))
+sns.heatmap(temperature_df, annot=True, cmap="coolwarm")
+plt.title("Temperature Heatmap")
+plt.xlabel("City")
+plt.ylabel("Date")
+plt.show()
+
+# Alert Visualization
+alerts = check_alerts(aggregated_data)
+alerts_df = pd.DataFrame([
+    {"City": alert[0], "Date": alert[1], "Alert": alert[2]}
+    for alert in alerts
+])
+
+plt.figure(figsize=(10, 6))
+sns.countplot(x="City", hue="Alert", data=alerts_df)
+plt.title("Alerts")
+plt.xlabel("City")
+plt.ylabel("Count")
+plt.show()
+
+# Close database connection
+conn.close()

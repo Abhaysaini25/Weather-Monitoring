@@ -1,0 +1,18 @@
+{
+    "openweathermap_api_key": "ebe4d01c53aef3f296068a0a19528b31",
+    "cities": [
+      "Delhi",
+      "Mumbai",
+      "Chennai",
+      "Bangalore",
+      "Kolkata",
+      "Hyderabad"
+    ],
+    "database": {
+      "name": "weather_data",
+      "path": "database.db"
+    },
+    "units": "metric",
+    "interval": 5
+  }
+  
